@@ -3,7 +3,6 @@ import time
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from google.cloud import vision, storage, translate_v2
-
 from secret import bot_token
 
 # Configurazione del logging

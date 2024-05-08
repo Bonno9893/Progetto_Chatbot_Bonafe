@@ -4,6 +4,13 @@ ls
 source venv/bin/activate
 pip3 install -r requirements.txt
 nohup [comando] &
-nohup venv/bin/python3 main.py &
+nohup python3 main.py &
 venv/bin& ls
 sudo apt-get install git
+Progetto_Chatbot_Bonafe
+kill 357743
+ps aux | grep python
+export GOOGLE_APPLICATION_CREDENTIALS="/home/filippo_bonafe98/Progetto_Chatbot_Bonafe/photo-chatbot-1-16d5d9d04aaa.json"
+echo $GOOGLE_APPLICATION_CREDENTIALS
+nano ~/.bashrc
+source ~/.bashrc
