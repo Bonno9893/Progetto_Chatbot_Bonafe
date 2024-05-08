@@ -1,5 +1,3 @@
-# PROGETTO PHOTO CHATBOT
-
 import logging
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
@@ -31,7 +29,7 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
     # Analizza l'immagine per ottenere le etichette
     image = vision.Image(content=photo_bytes)
     response = vision_client.label_detection(image=image)
-    labels = [label.description for label in response.label_annotations]
+    labels = [label.description.lower() for label in response.label_annotations]  # Converti le etichette in minuscolo
 
     # Genera un nome univoco per il file basato su user_id e photo_file_id
     photo_file_id = photo_file.file_id
@@ -54,8 +52,8 @@ def search_images(update: Update, context: CallbackContext) -> None:
     blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
     for blob in blobs:
         blob.reload()  # Ricarica i metadati del blob
-        labels = blob.metadata['labels'] if blob.metadata and 'labels' in blob.metadata else ''
-        if query in labels.split(','):
+        labels = blob.metadata.get('labels', '').lower()  # Converti le etichette in minuscolo
+        if query in labels:
             found_images.append(blob.public_url)
 
     if found_images:
