@@ -1,7 +1,9 @@
 import logging
+import time
 from telegram import Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
 from google.cloud import vision, storage
+
 from secret import bot_token
 
 # Configurazione del logging
@@ -14,99 +16,220 @@ storage_client = storage.Client()
 bucket = storage_client.get_bucket('photo_chatbot')
 bucket_name = 'photo_chatbot'
 
+# Dizionario per tenere traccia dell'ultimo tempo di upload per ogni utente
+last_upload_time = {}
+
+
 def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text('Ciao, inviami un\'immagine!')
 
+
 def help_command(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(
-        'Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immagini inviate dagli utenti e di recuperarle tramite la loro descrizione. Inviami un\'immagine per iniziare.')
+        """
+Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immagini inviate dagli utenti e di recuperarle tramite la loro descrizione. Per interagire con me utilizza i seguenti comandi:
+
+ 1. Invia una o più immagini, le conserverò per te!
+
+ 2. "cerca immagine *" per cercare un'immagine in base alla tua descrizione (Cerca immagine gatto)
+
+ 3. "Cerca tutte le immagini *" per cercare tutte le immagini corrispondenti a quella descrizione (Cerca tutte le immagini gatto)
+
+ 4. "Scarica tutte le immagini" per ottenere tutte le immagini da te caricate fino a questo momento
+
+ 5. "Elimina immagini ultima ricerca" per eliminare le immagini trovate nell'ultima tua ricerca
+
+ 6. "Elimina tutte le immagini" per eliminare tutte le foto da te caricate fino a questo momento
+
+ 7. "Start" per iniziare!
+
+ 8. "Aiuto" se hai bisogno che ti spieghi di nuovo come interagire con me. 
+
+Inviami un\'immagine per iniziare!
+        """)
+
+
+def clear_job_queue(context, name):
+    current_jobs = context.job_queue.get_jobs_by_name(name)
+    for job in current_jobs:
+        job.schedule_removal()
+
+
+def send_start_message(update: Update, context: CallbackContext):
+    if not context.user_data.get('batch_started'):
+        update.message.reply_text(
+            "Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
+        context.user_data['batch_started'] = True
+
+
+def send_summary_message(context: CallbackContext):
+    chat_id = context.job.context['chat_id']
+    user_data = context.job.context['user_data']
+    photo_count = user_data['uploaded_photos_count']
+
+    if photo_count > 0:
+        if photo_count == 1:
+            message = "Immagine salvata con successo ed etichettata!"
+        else:
+            message = f"{photo_count} immagini salvate con successo ed etichettate!"
+        context.bot.send_message(chat_id, text=message)
+
+    # Resetta i dati per il prossimo batch di foto
+    user_data['batch_started'] = False
+    user_data['uploaded_photos_count'] = 0
+    user_data['photo_batch_start_time'] = None
+
 
 def handle_photo(update: Update, context: CallbackContext) -> None:
-    try:
-        user_id = update.message.from_user.id
-        photo_file = update.message.photo[-1].get_file()
-        photo_bytes = photo_file.download_as_bytearray()
-        photo_bytes = bytes(photo_bytes)  # Conversione a bytes
+    user_id = update.message.from_user.id
+    user_data = context.user_data
 
-        # Crea il client per Google Cloud Storage utilizzando le credenziali dal file JSON
-        client = storage.Client.from_service_account_json('photo-chatbot-1-16d5d9d04aaa.json')
+    # Verifica se il job di riepilogo è già stato programmato
+    if 'photo_batch_start_time' not in user_data:
+        # Inizia un nuovo batch
+        user_data['photo_batch_start_time'] = time.time()
+        user_data['uploaded_photos_count'] = 0
+        update.message.reply_text(
+            "Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
+
+    # Processa la foto ricevuta
+    photo_file = update.message.photo[-1].get_file()
+    photo_bytes = photo_file.download_as_bytearray()
+    if isinstance(photo_bytes, bytearray):
+        photo_bytes = bytes(photo_bytes)
+
+    try:
+        # Crea il client per Google Cloud Storage e Vision API
+        storage_client = storage.Client()
+        vision_client = vision.ImageAnnotatorClient()
 
         # Analizza l'immagine per ottenere le etichette
         image = vision.Image(content=photo_bytes)
         response = vision_client.label_detection(image=image)
-        labels = [label.description.lower() for label in response.label_annotations]  # Converti le etichette in minuscolo
+        labels = [label.description.lower() for label in response.label_annotations]
 
         # Genera un nome univoco per il file basato su user_id e photo_file_id
-        file_name = f'{user_id}/{photo_file.file_id}.jpg'
+        file_name = f"{user_id}/{photo_file.file_id}.jpg"
 
         # Carica l'immagine su Google Cloud Storage
-        bucket = client.bucket('photo_chatbot')  # Seleziona il bucket corretto
+        bucket = storage_client.bucket('photo_chatbot')
         blob = bucket.blob(file_name)
-        blob.metadata = {'labels': ','.join(labels)}  # Salva le etichette come metadati
+        blob.metadata = {'labels': ','.join(labels)}
         blob.upload_from_string(photo_bytes, content_type='image/jpeg')
 
-        # Conferma all'utente che l'immagine è stata salvata
-        update.message.reply_text('Immagine salvata con successo e etichettata!')
+        # Incrementa il conteggio delle immagini caricate con successo
+        user_data['uploaded_photos_count'] += 1
+
     except Exception as e:
-        logger.error(f"Errore durante il caricamento dell'immagine: {str(e)}")
-        update.message.reply_text('Si è verificato un errore durante il caricamento dell\'immagine.')
+        logger.error(f"Error during image upload: {e}")
+        update.message.reply_text("Si è verificato un errore durante il caricamento dell'immagine.")
+
+    # Pianifica il job per inviare il messaggio di riepilogo
+    context.job_queue.run_once(
+        send_summary_message,
+        15,
+        context={'chat_id': update.message.chat_id, 'user_data': user_data}
+    )
 
 
-def search_single_image(update: Update, context: CallbackContext) -> None:
-    search_images(update, context, single=True)
+def search_images(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    command_text = update.message.text.lower()
+    query = command_text.replace('cerca immagine ', '').replace('cerca tutte le immagini ', '').strip()
 
-def search_all_images(update: Update, context: CallbackContext) -> None:
-    search_images(update, context, single=False)
+    single = 'cerca immagine' in command_text
+    context.user_data['last_search'] = []  # Prepara la lista per tenere traccia dell'ultima ricerca
 
-def search_images(update: Update, context: CallbackContext, single=True):
+    blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
+    found_any = False
+    for blob in blobs:
+        blob.reload()
+        labels = blob.metadata.get('labels', '').lower()
+        if query in labels:
+            found_any = True
+            context.user_data['last_search'].append(blob.name)
+            image_bytes = blob.download_as_bytes()
+            context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes)
+            if single:
+                break
+
+    if not found_any:
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca.')
+
+
+def delete_last_search(update: Update, context: CallbackContext):
+    logger.info("Comando di eliminazione ricevuto")
     try:
         user_id = update.message.from_user.id
-        command_text = update.message.text.lower()
-        if "cerca tutte le immagini" in command_text:
-            query = command_text.replace('cerca tutte le immagini', '').strip()
-            single = False
+        if 'last_search' in context.user_data and context.user_data['last_search']:
+            logger.info(f"Eliminazione delle immagini: {context.user_data['last_search']}")
+            for file_name in context.user_data['last_search']:
+                blob = bucket.blob(file_name)
+                if blob.exists():
+                    blob.delete()
+            context.user_data['last_search'] = []  # Pulisci la lista dopo l'eliminazione
+            update.message.reply_text('Immagini dell\'ultima ricerca eliminate con successo.')
         else:
-            query = command_text.replace('cerca immagine', '').strip()
-            single = True
+            update.message.reply_text('Non ci sono immagini da eliminare dalla tua ultima ricerca.')
+    except Exception as e:
+        logger.error(f"Errore durante l'eliminazione delle immagini: {str(e)}")
+        update.message.reply_text('Si è verificato un errore durante l\'eliminazione delle immagini.')
 
-        # Scansiona tutte le immagini salvate per questo utente
+
+def delete_all_images(update: Update, context: CallbackContext) -> None:
+    user_id = update.message.from_user.id
+    count = 0
+
+    try:
+        # Crea un elenco di tutti i blob nel bucket per questo utente
         blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
-        found_any = False  # Flag per verificare se abbiamo trovato almeno una immagine
         for blob in blobs:
-            blob.reload()  # Ricarica i metadati del blob
-            labels = blob.metadata.get('labels', '').lower()  # Converti le etichette in minuscolo
-            if query in labels:
-                found_any = True
+            blob.delete()  # Elimina il file
+            count += 1
+
+        update.message.reply_text(f'Tutte le tue {count} immagini sono state eliminate con successo.')
+
+    except Exception as e:
+        logger.error(f"Errore durante l'eliminazione delle immagini: {str(e)}")
+        update.message.reply_text("Si è verificato un errore durante l'eliminazione delle tue immagini.")
+
+
+def download_all_images(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    update.message.reply_text("Inizio del download di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
+
+    try:
+        blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
+        if blobs:
+            for blob in blobs:
                 image_bytes = blob.download_as_bytes()
                 context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes)
-                if single:
-                    return  # Se è richiesta solo una foto, interrompe dopo il primo match
-
-        if not found_any:
-            update.message.reply_text('Nessuna immagine trovata per la tua ricerca.')
+            update.message.reply_text("Tutte le immagini sono state scaricate con successo.")
+        else:
+            update.message.reply_text("Non ci sono immagini da scaricare.")
     except Exception as e:
-        logger.error(f"Errore durante la ricerca delle immagini: {str(e)}")
-        update.message.reply_text('Si è verificato un errore durante la ricerca delle immagini.')
-
-
+        logger.error(f"Errore durante il download delle immagini: {str(e)}")
+        update.message.reply_text("Si è verificato un errore durante il download delle immagini.")
 
 
 def error(update, context):
     """Logga gli errori causati dagli aggiornamenti."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
+
 def main() -> None:
     print('Il Bot è partito...')
     updater = Updater(bot_token, use_context=True)
 
     dp = updater.dispatcher
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CommandHandler("help", help_command))
-    dp.add_handler(CommandHandler("cerca_immagine", search_single_image))
-    dp.add_handler(CommandHandler("cerca_tutte_le_immagini", search_all_images))
-    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'(?i)^cerca immagine.*'), search_single_image))
-    dp.add_handler(MessageHandler(Filters.text & Filters.regex(r'(?i)^cerca tutte le immagini.*'), search_all_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Start$'), start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Aiuto$'), help_command))
     dp.add_handler(MessageHandler(Filters.photo, handle_photo))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Cerca immagine .*$'), search_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Cerca tutte le immagini .*$'), search_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Elimina immagini ultima ricerca$'), delete_last_search))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Elimina tutte le immagini$'), delete_all_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Scarica tutte le immagini$'), download_all_images))
 
     # Registrazione del gestore di errori
     dp.add_error_handler(error)
@@ -114,6 +237,6 @@ def main() -> None:
     updater.start_polling()
     updater.idle()
 
+
 if __name__ == '__main__':
     main()
-
