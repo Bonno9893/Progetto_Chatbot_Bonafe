@@ -1,0 +1,4 @@
+cd C:\Users\Utente\PycharmProjects\PCLOUD
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+.\venv\Scripts\Activate.ps1
+python main.py

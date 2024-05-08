@@ -1,0 +1,8 @@
+sudo apt-get install python3-venv
+python3 -m venv venv
+ls
+source venv/bin/activate
+pip3 install -r requirements.txt
+nohup [comando] &
+nohup venv/bin/python3 main.py &
+venv/bin& ls
