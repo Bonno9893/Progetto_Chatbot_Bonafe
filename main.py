@@ -32,15 +32,13 @@ def button(update: Update, context: CallbackContext) -> None:
 
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
+
 # Funzione per gestire i comandi non validi
 def handle_invalid_command(update, context):
-    update.message.reply_text("Comando non valido. Potresti aver scritto uno dei comandi previsti in modo errato, per esempio senza la maiuscola iniziale. Prova di nuovo o clicca il pulsante di aiuto, ti invierò di nuovo i comandi da utilizzare nella forma corretta!." , reply_markup=reply_markup)
-
-# Impostazione del gestore di comandi per i comandi non validi
-invalid_command_handler = MessageHandler(Filters.command, handle_invalid_command)
-
-# Aggiunta del gestore di comandi al dispatcher
-dispatcher.add_handler(invalid_command_handler)
+    update.message.reply_text("""
+Comando non valido!
+Potresti aver scritto uno dei comandi previsti in modo errato, per esempio senza la maiuscola iniziale...
+Prova di nuovo o clicca il pulsante di aiuto, ti invierò di nuovo i comandi da utilizzare nella forma corretta!.""" , reply_markup=help_button())
 
 
 def start(update: Update, context: CallbackContext) -> None:
@@ -269,7 +267,6 @@ def handle_commands(update: Update, context: CallbackContext):
 def main() -> None:
     print('Il Bot è partito...')
     updater = Updater(bot_token, use_context=True)
-
     dp = updater.dispatcher
     dp.add_handler(CommandHandler("start", start))
     dp.add_handler(MessageHandler(Filters.regex(r'^Start$'), start))
@@ -282,8 +279,10 @@ def main() -> None:
     dp.add_handler(MessageHandler(Filters.regex(r'^Elimina tutte le immagini$'), delete_all_images))
     dp.add_handler(MessageHandler(Filters.regex(r'^Scarica tutte le immagini$'), download_all_images))
     dp.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
-
     dp.add_handler(CallbackQueryHandler(button))
+
+    invalid_command_handler = MessageHandler(Filters.command | Filters.text, handle_invalid_command)
+    dp.add_handler(invalid_command_handler)
 
     # Registrazione del gestore di errori
     dp.add_error_handler(error)
