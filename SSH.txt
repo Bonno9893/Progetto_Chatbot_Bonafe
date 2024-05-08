@@ -2,6 +2,9 @@ sudo apt-get install python3-venv
 python3 -m venv venv
 ls
 source venv/bin/activate
+sudo apt-get install git
+git clone
+git pull
 pip3 install -r requirements.txt
 nohup [comando] &
 nohup python3 main.py &
