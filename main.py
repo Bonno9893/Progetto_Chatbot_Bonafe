@@ -1,175 +1,117 @@
 import logging
 import time
-from telegram import Update, ReplyKeyboardMarkup
-from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from google.cloud import vision, storage, translate_v2
+
 from secret import bot_token
 
 # Configurazione del logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Configurazione dei client per Google Cloud Vision, Google Cloud Storage e Google Cloud Translation
+# Configurazione dei client per Google Cloud Vision e Google Cloud Storage
 vision_client = vision.ImageAnnotatorClient()
 storage_client = storage.Client()
-translate_client = translate_v2.Client()
 bucket = storage_client.get_bucket('photo_chatbot')
+bucket_name = 'photo_chatbot'
+translate_client = translate_v2.Client()
 
-# Dizionario dei messaggi multilingua
-messaggi = {
-    'start': {
-        'en': "Hello, send me an image to start!",
-        'it': "Ciao, inviami un'immagine per iniziare!"
-    },
-    'help': {
-        'en': """Hi, let me introduce myself, I am Photo Chatbot! My job is to store images submitted by users and retrieve them via their description. To interact with me use the following commands:
+# Dizionario per tenere traccia dell'ultimo tempo di upload per ogni utente
+last_upload_time = {}
 
-1. Send one or more images, I will store them for you!
-2. \"Search image *\" to search for an image based on your description (e.g., Search cat image)
-3. \"Search all images *\" to search for all images matching that description (e.g., Search all cat images)
-4. \"Download all images\" to get all images you have uploaded so far
-5. \"Delete last search images\" to delete the images found in your last search
-6. \"Delete all images\" to delete all images you uploaded up to this moment
-7. \"Start\" to get started!
-8. \"Help\" if you need me to explain again how to interact with me.
+def help_button():
+    keyboard = [[InlineKeyboardButton("Aiuto", callback_data='help')]]
+    return InlineKeyboardMarkup(keyboard)
 
-Send me an image to get started!""",
-        'it': """Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immagini inviate dagli utenti e di recuperarle tramite la loro descrizione. Per interagire con me utilizza i seguenti comandi:
+def button(update: Update, context: CallbackContext) -> None:
+    query = update.callback_query
+    query.answer()
+    # Chiama la funzione help_command quando il pulsante di aiuto viene premuto
+    if query.data == 'help':
+        help_command(update, context)
+
+
+def start(update: Update, context: CallbackContext) -> None:
+    keyboard = [
+        [InlineKeyboardButton("Aiuto", callback_data='help')],
+    ]
+    user_first_name = update.message.from_user.first_name
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    update.message.reply_text(f'Ciao {user_first_name}! Premi il pulsante qui sotto per ottenere aiuto.', reply_markup=reply_markup)
+
+
+# Funzione per gestire il comando "help"
+def help_command(update: Update, context: CallbackContext):
+    if update.callback_query:
+        query = update.callback_query
+        query.answer()
+        chat_id = query.message.chat_id
+        message_id = query.message.message_id
+        method = context.bot.edit_message_text
+    else:
+        chat_id = update.message.chat_id
+        message_id = None
+        method = context.bot.send_message
+
+    help_text = """
+Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immagini inviate dagli utenti e di recuperarle tramite la loro descrizione. Per interagire con me scrivi in chat qui sotto i seguenti comandi:
 
 1. Invia una o più immagini, le conserverò per te!
-2. \"Cerca immagine *\" per cercare un'immagine in base alla tua descrizione (es., Cerca immagine gatto)
-3. \"Cerca tutte le immagini *\" per cercare tutte le immagini corrispondenti a quella descrizione (es., Cerca tutte le immagini gatto)
-4. \"Scarica tutte le immagini\" per ottenere tutte le immagini da te caricate fino a questo momento
-5. \"Elimina immagini ultima ricerca\" per eliminare le immagini trovate nell'ultima tua ricerca
-6. \"Elimina tutte le immagini\" per eliminare tutte le foto da te caricate fino a questo momento
-7. \"Start\" per iniziare!
-8. \"Aiuto\" se hai bisogno che ti spieghi di nuovo come interagire con me.
+2. Per cercare un'immagine corrispondente ad una tua descrizione utilizza il comando "Cerca immagine [parola chiave]" (es. Cerca immagine gatto). Utilizza una sola parola per descrivere l'immagine!
+3. Per cercare tutte le immagini corrispondenti ad una tua descrizione utilizza il comando "Cerca tutte le immagini [parola chiave]" (es. Cerca tutte le immagini gatto). Utilizza una sola parola per descrivere le immagini!
+4. Per ottenere tutte le immagini da te caricate fino a questo momento scrivi "Scarica tutte le immagini"
+5. Per eliminare le immagini trovate nell'ultima tua ricerca scrivi "Elimina immagini ultima ricerca"
+6. Per eliminare tutte le immagini da te caricate fino a questo momento scrivi "Elimina tutte le immagini" 
+7. Scrivi "Aiuto" o premi il relativo pulsante alla fine dei miei messaggi se hai bisogno che ti spieghi di nuovo come interagire con me.
 
-Inviami un'immagine per iniziare!"""
-    },
-    'no_images_found': {
-        'en': "No images found for your search.",
-        'it': "Nessuna immagine trovata per la tua ricerca."
-    },
-    'images_deleted': {
-        'en': "Images from the last search were successfully deleted.",
-        'it': "Le immagini dell'ultima ricerca sono state eliminate con successo."
-    },
-    'no_images_to_delete': {
-        'en': "There are no images to delete from your last search.",
-        'it': "Non ci sono immagini da eliminare dalla tua ultima ricerca."
-    },
-    'error_deleting_images': {
-        'en': "An error occurred during the deletion of images.",
-        'it': "Si è verificato un errore durante l'eliminazione delle immagini."
-    },
-    'all_images_deleted': {
-        'en': "All your images have been successfully deleted.",
-        'it': "Tutte le tue immagini sono state eliminate con successo."
-    },
-    'download_started': {
-        'en': "Starting the download of all your images... This may take some time.",
-        'it': "Inizio del download di tutte le tue immagini... Questo potrebbe richiedere un po' di tempo."
-    },
-    'all_images_downloaded': {
-        'en': "All images have been downloaded successfully.",
-        'it': "Tutte le immagini sono state scaricate con successo."
-    },
-    'error_during_download': {
-        'en': "An error occurred during the download of images.",
-        'it': "Si è verificato un errore durante il download delle immagini."
-    },
-    'uploading_started': {
-        'en': "Starting the upload of all your images... This may take some time.",
-        'it': "Inizio del caricamento di tutte le tue immagini... Questo potrebbe richiedere un po' di tempo."
-    },
-    'upload_successful': {
-        'en': "Image successfully uploaded and labeled!",
-        'it': "Immagine caricata con successo ed etichettata!"
-    },
-    'error_uploading': {
-        'en': "An error occurred during the upload of the image.",
-        'it': "Si è verificato un errore durante il caricamento dell'immagine."
-    }
-}
-
-
-def ask_language(update: Update, context: CallbackContext):
-    keyboard = [['English', 'Italiano']]  # Aggiungi altre lingue qui se necessario
-    reply_markup = ReplyKeyboardMarkup(keyboard, one_time_keyboard=True, resize_keyboard=True)
-    update.message.reply_text('Please choose your language / Per favore, scegli la tua lingua:', reply_markup=reply_markup)
-
-def set_language(update: Update, context: CallbackContext):
-    chosen_language = update.message.text
-    context.user_data['lang'] = 'en' if chosen_language == 'English' else 'it'
-    start(update, context)  # Invia il messaggio di benvenuto nella lingua scelta
-
-# Determinazione della lingua dell'utente
-def get_user_lang(update: Update, context: CallbackContext):
-    return context.user_data.get('lang', 'en')
-
-
-
-
-def translate_to_english(text):
-    if translate_client.detect_language(text)['language'] == 'en':
-        return text
-    result = translate_client.translate(text, target_language='en')
-    return result['translatedText']
-
-
-# Funzione per iniziare la conversazione e impostare la lingua
-def start(update: Update, context: CallbackContext):
-    user_lang = get_user_lang(update, context)
-    update.message.reply_text(messaggi['start'][user_lang])
-
-
-# Funzione di aiuto che fornisce informazioni sull'utilizzo del bot
-def help_command(update: Update, context: CallbackContext):
-    user_lang = get_user_lang(update, context)
-    update.message.reply_text(messaggi['help'][user_lang])
-
-
-# Gestione delle foto ricevute
+Inviami un'immagine per iniziare!
+    """
+    context.bot.send_message(chat_id, text=help_text, reply_markup=help_button())
 
 
 def clear_job_queue(context, name):
-    # Ottieni tutti i job dal JobQueue
     current_jobs = context.job_queue.get_jobs_by_name(name)
     for job in current_jobs:
-        # Pianifica la rimozione di ogni job
         job.schedule_removal()
 
-def send_summary_message(context: CallbackContext):
-    job_context = context.job.context
-    chat_id = job_context['chat_id']
-    user_data = job_context['user_data']
-    user_lang = user_data.get('lang', 'en')  # Assicurati che 'lang' sia memorizzato in 'user_data'
 
+def send_start_message(update: Update, context: CallbackContext):
+    if not context.user_data.get('batch_started'):
+        update.message.reply_text(
+            "Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
+        context.user_data['batch_started'] = True
+
+
+def send_summary_message(context: CallbackContext):
+    chat_id = context.job.context['chat_id']
+    user_data = context.job.context['user_data']
     photo_count = user_data['uploaded_photos_count']
+
     if photo_count > 0:
         if photo_count == 1:
-            message = messaggi['one_image_uploaded'][user_lang]  # Assicurati di avere questo messaggio nel dizionario
+            message = "Immagine salvata con successo ed etichettata!"
         else:
-            message = f"{photo_count} " + messaggi['images_uploaded'][user_lang]  # Assicurati di avere questo messaggio nel dizionario
-        context.bot.send_message(chat_id, text=message)
+            message = f"{photo_count} immagini salvate con successo ed etichettate!"
+        context.bot.send_message(chat_id, text=message,  reply_markup=help_button())
 
     # Resetta i dati per il prossimo batch di foto
     user_data['batch_started'] = False
     user_data['uploaded_photos_count'] = 0
     user_data['photo_batch_start_time'] = None
 
+
 def handle_photo(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     user_data = context.user_data
-    user_lang = user_data.get('lang', 'en')  # Ottieni la lingua dell'utente, default a inglese
 
     # Verifica se il job di riepilogo è già stato programmato
     if 'photo_batch_start_time' not in user_data:
         # Inizia un nuovo batch
         user_data['photo_batch_start_time'] = time.time()
         user_data['uploaded_photos_count'] = 0
-        update.message.reply_text(messaggi['download_started'][user_lang])  # Messaggio di inizio upload in lingua dell'utente
+        update.message.reply_text(
+            "Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
 
     # Processa la foto ricevuta
     photo_file = update.message.photo[-1].get_file()
@@ -184,7 +126,7 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
 
         # Analizza l'immagine per ottenere le etichette
         image = vision.Image(content=photo_bytes)
-        response = vision_client.label_detection(image=image)
+        response = vision_client.label_detection(image=image, max_results=20)
         labels = [label.description.lower() for label in response.label_annotations]
 
         # Genera un nome univoco per il file basato su user_id e photo_file_id
@@ -201,7 +143,7 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
 
     except Exception as e:
         logger.error(f"Error during image upload: {e}")
-        update.message.reply_text(messaggi['error_during_upload'][user_lang])  # Messaggio di errore in lingua dell'utente
+        update.message.reply_text("Si è verificato un errore durante il caricamento dell'immagine.", reply_markup=help_button())
 
     # Pianifica il job per inviare il messaggio di riepilogo
     context.job_queue.run_once(
@@ -211,22 +153,23 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
     )
 
 
-# Ricerca di immagini basata su descrizione
+def translate_to_english(text):
+    result = translate_client.translate(text, target_language='en')
+    return result['translatedText']
+
+
+# Funzione per la ricerca delle immagini
 def search_images(update: Update, context: CallbackContext):
-    user_lang = get_user_lang(update, context)  # Assicurati che questa funzione restituisca la lingua dell'utente
     user_id = update.message.from_user.id
     command_text = update.message.text.lower()
-    # Ottieni la parte della query dopo il comando
-    if command_text.startswith("search image"):
-        query = command_text.replace('search image', '').strip()
-    else:
-        query = command_text.replace('search all images', '').strip()
-
-    # Traduci la query in inglese se necessario
-    translated_query = translate_to_english(query)
+    query = command_text.replace('cerca immagine ', '').replace('cerca tutte le immagini ', '').strip()
 
     # Determina se la ricerca è per una singola immagine o per tutte
-    single = 'search image' in command_text
+    single_search = 'cerca immagine' in command_text
+    context.user_data['last_search'] = []  # Prepara la lista per tenere traccia dell'ultima ricerca
+
+    # Traduci la query in inglese
+    translated_query = translate_to_english(query)
 
     context.user_data['last_search'] = []  # Prepara la lista per tenere traccia dell'ultima ricerca
     blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
@@ -234,81 +177,105 @@ def search_images(update: Update, context: CallbackContext):
     for blob in blobs:
         blob.reload()
         labels = blob.metadata.get('labels', '').split(',')
-        if translated_query in labels:
+        if translated_query.lower() in labels:
             found_any = True
             context.user_data['last_search'].append(blob.name)
             image_bytes = blob.download_as_bytes()
-            context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes)
-            if single:
-                break  # Esci dopo aver trovato e inviato la prima immagine corrispondente
+            context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes, reply_markup=help_button())
+            if single_search:
+                break
 
     if not found_any:
-        update.message.reply_text(messaggi['no_image_found'][user_lang])  # Usa il messaggio multilingua
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca.', reply_markup=help_button())
 
 
 
-# Eliminazione dell'ultima ricerca di immagini
 def delete_last_search(update: Update, context: CallbackContext):
-    user_lang = get_user_lang(update, context)
+    logger.info("Comando di eliminazione ricevuto")
     try:
-        if 'last_search' in context.user_data:
-            for blob_name in context.user_data['last_search']:
-                blob = bucket.blob(blob_name)
-                blob.delete()
-            context.user_data.pop('last_search', None)
-            update.message.reply_text(messaggi['images_deleted'][user_lang])
+        user_id = update.message.from_user.id
+        if 'last_search' in context.user_data and context.user_data['last_search']:
+            logger.info(f"Eliminazione delle immagini: {context.user_data['last_search']}")
+            for file_name in context.user_data['last_search']:
+                blob = bucket.blob(file_name)
+                if blob.exists():
+                    blob.delete()
+            context.user_data['last_search'] = []  # Pulisci la lista dopo l'eliminazione
+            update.message.reply_text('Immagini dell\'ultima ricerca eliminate con successo.', reply_markup=help_button())
         else:
-            update.message.reply_text(messaggi['no_images_to_delete'][user_lang])
+            update.message.reply_text('Non ci sono immagini da eliminare dalla tua ultima ricerca.', reply_markup=help_button())
     except Exception as e:
-        logger.error(f"Error during image deletion: {str(e)}")
-        update.message.reply_text(messaggi['error_deleting_images'][user_lang])
+        logger.error(f"Errore durante l'eliminazione delle immagini: {str(e)}")
+        update.message.reply_text('Si è verificato un errore durante l\'eliminazione delle immagini.')
 
 
-# Eliminazione di tutte le immagini caricate dall'utente
-def delete_all_images(update: Update, context: CallbackContext):
-    user_lang = get_user_lang(update, context)
+def delete_all_images(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
-    blobs = list(bucket.list_blobs(prefix=f"{user_id}/"))
-    for blob in blobs:
-        blob.delete()
-    update.message.reply_text(messaggi['all_images_deleted'][user_lang])
+    count = 0
+
+    try:
+        # Crea un elenco di tutti i blob nel bucket per questo utente
+        blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
+        for blob in blobs:
+            blob.delete()  # Elimina il file
+            count += 1
+
+        update.message.reply_text(f'Tutte le tue {count} immagini sono state eliminate con successo.', reply_markup=help_button())
+
+    except Exception as e:
+        logger.error(f"Errore durante l'eliminazione delle immagini: {str(e)}")
+        update.message.reply_text("Si è verificato un errore durante l'eliminazione delle tue immagini.")
 
 
-# Download di tutte le immagini
 def download_all_images(update: Update, context: CallbackContext):
-    user_lang = get_user_lang(update, context)
     user_id = update.message.from_user.id
-    update.message.reply_text(messaggi['download_started'][user_lang])
-    blobs = list(bucket.list_blobs(prefix=f"{user_id}/"))
-    for blob in blobs:
-        image_bytes = blob.download_as_bytes()
-        update.message.reply_photo(photo=image_bytes)
-    update.message.reply_text(messaggi['all_images_downloaded'][user_lang])
+    update.message.reply_text("Inizio del download di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
+
+    try:
+        blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
+        if blobs:
+            for blob in blobs:
+                image_bytes = blob.download_as_bytes()
+                context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes)
+            update.message.reply_text("Tutte le immagini sono state scaricate con successo.", reply_markup=help_button())
+        else:
+            update.message.reply_text("Non ci sono immagini da scaricare.", reply_markup=help_button())
+    except Exception as e:
+        logger.error(f"Errore durante il download delle immagini: {str(e)}")
+        update.message.reply_text("Si è verificato un errore durante il download delle immagini.", reply_markup=help_button())
 
 
-# Funzione per gestire gli errori
 def error(update, context):
+    """Logga gli errori causati dagli aggiornamenti."""
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
+def handle_commands(update: Update, context: CallbackContext):
+    update.message.reply_text(
+        "Azione completata! Usa il pulsante qui sotto per ulteriori aiuti o informazioni.",
+        reply_markup=help_button()
+    )
 
-# Funzione principale per avviare il bot
-def main():
+def main() -> None:
+    print('Il Bot è partito...')
     updater = Updater(bot_token, use_context=True)
+
     dp = updater.dispatcher
-
-    dp.add_handler(MessageHandler(Filters.regex('^(English|Italiano)$'), set_language))
-    dp.add_handler(CommandHandler('start', ask_language))
-    #dp.add_handler(MessageHandler(Filters.regex(r'^Start$'), start))
-    dp.add_handler(MessageHandler(Filters.regex(r'^Help$'), help_command))
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Start$'), start))
+    dp.add_handler(CommandHandler("help", help_command))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Aiuto$'), help_command))
     dp.add_handler(MessageHandler(Filters.photo, handle_photo))
-    dp.add_handler(MessageHandler(Filters.regex(r'^Search image.*'), search_images))
-    dp.add_handler(MessageHandler(Filters.regex(r'^Search all images.*'), search_images))
-    dp.add_handler(MessageHandler(Filters.regex(r'^Delete last search'), delete_last_search))
-    dp.add_handler(MessageHandler(Filters.regex(r'^Delete all images'), delete_all_images))
-    dp.add_handler(MessageHandler(Filters.regex(r'^Download all images'), download_all_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Cerca immagine .*$'), search_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Cerca tutte le immagini .*$'), search_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Elimina immagini ultima ricerca$'), delete_last_search))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Elimina tutte le immagini$'), delete_all_images))
+    dp.add_handler(MessageHandler(Filters.regex(r'^Scarica tutte le immagini$'), download_all_images))
+    dp.add_handler(CallbackQueryHandler(help_command, pattern='^help$'))
+
+    dp.add_handler(CallbackQueryHandler(button))
+
+    # Registrazione del gestore di errori
     dp.add_error_handler(error)
-
-
 
     updater.start_polling()
     updater.idle()
