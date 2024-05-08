@@ -256,7 +256,7 @@ def handle_commands(update: Update, context: CallbackContext):
     )
 
 def main() -> None:
-    print('Il Bot è partito...')
+    print('Il Bot è partito')
     updater = Updater(bot_token, use_context=True)
 
     dp = updater.dispatcher
