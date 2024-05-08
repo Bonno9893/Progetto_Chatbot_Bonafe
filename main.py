@@ -30,6 +30,18 @@ def button(update: Update, context: CallbackContext) -> None:
     if query.data == 'help':
         help_command(update, context)
 
+from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
+
+# Funzione per gestire i comandi non validi
+def handle_invalid_command(update, context):
+    update.message.reply_text("Comando non valido. Potresti aver scritto uno dei comandi previsti in modo errato, per esempio senza la maiuscola iniziale. Prova di nuovo o clicca il pulsante di aiuto, ti invierò di nuovo i comandi da utilizzare nella forma corretta!." , reply_markup=reply_markup)
+
+# Impostazione del gestore di comandi per i comandi non validi
+invalid_command_handler = MessageHandler(Filters.command, handle_invalid_command)
+
+# Aggiunta del gestore di comandi al dispatcher
+dispatcher.add_handler(invalid_command_handler)
+
 
 def start(update: Update, context: CallbackContext) -> None:
     keyboard = [
