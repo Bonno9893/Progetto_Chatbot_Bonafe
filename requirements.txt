@@ -3,3 +3,4 @@ secret
 google-cloud-storage
 google-cloud-vision
 google-cloud-translate
+nltk

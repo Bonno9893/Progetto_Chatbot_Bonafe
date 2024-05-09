@@ -1,9 +1,13 @@
 import logging
 import time
+import nltk
+from nltk.corpus import wordnet
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters, CallbackContext, CallbackQueryHandler
 from google.cloud import vision, storage, translate_v2
 from secret import bot_token
+
+nltk.download('wordnet')
 
 # Configurazione del logging
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -163,8 +167,21 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
 
 
 def translate_to_english(text):
-    result = translate_client.translate(text, target_language='en')
+    result = translate_client.translate(text, source_language='it', target_language='en')
     return result['translatedText']
+
+def translate_and_synonyms(text, target_language='en'):
+    translated_text = translate_to_english(text)
+    synonyms = set()
+    for synset in wordnet.synsets(translated_text):
+        for lemma in synset.lemmas():
+            # Filtra solo i sinonimi con una parola
+            if '_' not in lemma.name() and lemma.name() != translated_text:
+                synonyms.add(lemma.name())
+    if not synonyms:
+        synonyms = {translated_text}  # Usa la traduzione se non ci sono sinonimi
+    print(synonyms)
+    return list(synonyms)
 
 
 # Funzione per la ricerca delle immagini
@@ -173,14 +190,29 @@ def search_images(update: Update, context: CallbackContext):
     command_text = update.message.text.lower()
     query = command_text.replace('cerca immagine ', '').replace('cerca tutte le immagini ', '').strip()
 
-    # Determina se la ricerca è per una singola immagine o per tutte
-    single_search = 'cerca immagine' in command_text
+    # Prima ricerca utilizzando la query originale
+    found_any = search_images_with_query(update, context, query)
+
+    # Se non troviamo nulla con la query originale, proviamo con i sinonimi
+    if not found_any:
+        translations_and_synonyms = translate_and_synonyms(query)
+        for translated_query in translations_and_synonyms:
+            found_any = search_images_with_query(update, context, translated_query)
+            if found_any:
+                break
+
+    if not found_any:
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca.', reply_markup=help_button())
+
+
+def search_images_with_query(update: Update, context: CallbackContext, query: str) -> bool:
+    user_id = update.message.from_user.id
+    single_search = 'cerca immagine' in update.message.text.lower()
     context.user_data['last_search'] = []  # Prepara la lista per tenere traccia dell'ultima ricerca
 
-    # Traduci la query in inglese
     translated_query = translate_to_english(query)
+    print(translated_query)
 
-    context.user_data['last_search'] = []  # Prepara la lista per tenere traccia dell'ultima ricerca
     blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
     found_any = False
     for blob in blobs:
@@ -194,8 +226,7 @@ def search_images(update: Update, context: CallbackContext):
             if single_search:
                 break
 
-    if not found_any:
-        update.message.reply_text('Nessuna immagine trovata per la tua ricerca.', reply_markup=help_button())
+    return found_any
 
 
 
