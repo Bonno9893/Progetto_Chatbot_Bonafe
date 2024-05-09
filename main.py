@@ -229,7 +229,6 @@ def search_images_with_query(update: Update, context: CallbackContext, query: st
     return found_any
 
 
-
 def delete_last_search(update: Update, context: CallbackContext):
     logger.info("Comando di eliminazione ricevuto")
     try:
