@@ -37,7 +37,6 @@ def button(update: Update, context: CallbackContext) -> None:
 from telegram.ext import Updater, CommandHandler, MessageHandler, Filters
 
 
-# Funzione per gestire i comandi non validi
 def handle_invalid_command(update, context):
     update.message.reply_text("""
 Comando non valido!
@@ -54,7 +53,6 @@ def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f'Ciao {user_first_name}! Premi il pulsante qui sotto per ottenere aiuto.', reply_markup=reply_markup)
 
 
-# Funzione per gestire il comando "help"
 def help_command(update: Update, context: CallbackContext):
     if update.callback_query:
         query = update.callback_query
@@ -71,12 +69,13 @@ def help_command(update: Update, context: CallbackContext):
 Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immagini inviate dagli utenti e di recuperarle tramite la loro descrizione. Per interagire con me scrivi in chat qui sotto i seguenti comandi:
 
 1. Invia una o più immagini, le conserverò per te!
-2. Per cercare un'immagine corrispondente ad una tua descrizione utilizza il comando "Cerca immagine [parola chiave]" (es. Cerca immagine gatto). Utilizza una sola parola per descrivere l'immagine!
-3. Per cercare tutte le immagini corrispondenti ad una tua descrizione utilizza il comando "Cerca tutte le immagini [parola chiave]" (es. Cerca tutte le immagini gatto). Utilizza una sola parola per descrivere le immagini!
-4. Per ottenere tutte le immagini da te caricate fino a questo momento scrivi "Scarica tutte le immagini"
-5. Per eliminare le immagini trovate nell'ultima tua ricerca scrivi "Elimina immagini ultima ricerca"
-6. Per eliminare tutte le immagini da te caricate fino a questo momento scrivi "Elimina tutte le immagini" 
-7. Scrivi "Aiuto" o premi il relativo pulsante alla fine dei miei messaggi se hai bisogno che ti spieghi di nuovo come interagire con me.
+2. Se invii una sola immagine, puoi scrivere una descrizione composta da una o più parole prima dell'invio. Questa mi aiuterà a trovarla più facilmente!
+3. Per cercare un'immagine corrispondente ad una tua descrizione utilizza il comando "Cerca immagine [parola chiave]" (es. Cerca immagine gatto). Utilizza una sola parola per descrivere l'immagine!
+4. Per cercare tutte le immagini corrispondenti ad una tua descrizione utilizza il comando "Cerca tutte le immagini [parola chiave]" (es. Cerca tutte le immagini gatto). Utilizza una sola parola per descrivere le immagini!
+5. Per ottenere tutte le immagini da te caricate fino a questo momento scrivi "Scarica tutte le immagini"
+6. Per eliminare le immagini trovate nell'ultima tua ricerca scrivi "Elimina immagini ultima ricerca"
+7. Per eliminare tutte le immagini da te caricate fino a questo momento scrivi "Elimina tutte le immagini" 
+8. Scrivi "Aiuto" o premi il relativo pulsante alla fine dei miei messaggi se hai bisogno che ti spieghi di nuovo come interagire con me.
 
 Inviami un'immagine per iniziare!
     """
@@ -126,9 +125,15 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
         update.message.reply_text(
             "Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
 
+    # Verifica se è presente almeno una foto nell'aggiornamento
+    if not update.message.photo:
+        update.message.reply_text("Il messaggio non contiene una foto.")
+        return
+
     # Processa la foto ricevuta
     photo_file = update.message.photo[-1].get_file()
     photo_bytes = photo_file.download_as_bytearray()
+
     if isinstance(photo_bytes, bytearray):
         photo_bytes = bytes(photo_bytes)
 
@@ -137,18 +142,29 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
         storage_client = storage.Client()
         vision_client = vision.ImageAnnotatorClient()
 
+        # Estrai la descrizione fornita dall'utente se presente
+        user_description = update.message.caption.lower() if update.message.caption else ""
+
         # Analizza l'immagine per ottenere le etichette
         image = vision.Image(content=photo_bytes)
         response = vision_client.label_detection(image=image, max_results=20)
-        labels = [label.description.lower() for label in response.label_annotations]
+        cloud_vision_labels = [label.description.lower() for label in response.label_annotations]
+
+        # Uniamo le etichette di Cloud Vision e quelle della descrizione dell'utente
+        combined_labels = set(cloud_vision_labels)
+        if user_description:
+            combined_labels.update(user_description.split())
+
+        # Aggiungi le etichette come metadati dell'immagine
+        metadata = {'labels': ','.join(combined_labels)}
 
         # Genera un nome univoco per il file basato su user_id e photo_file_id
         file_name = f"{user_id}/{photo_file.file_id}.jpg"
 
-        # Carica l'immagine su Google Cloud Storage
+        # Carica l'immagine su Google Cloud Storage con i relativi metadati
         bucket = storage_client.bucket('photo_chatbot')
         blob = bucket.blob(file_name)
-        blob.metadata = {'labels': ','.join(labels)}
+        blob.metadata = metadata
         blob.upload_from_string(photo_bytes, content_type='image/jpeg')
 
         # Incrementa il conteggio delle immagini caricate con successo
