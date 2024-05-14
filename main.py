@@ -137,9 +137,15 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
 
         user_data['uploaded_photos_count'] += 1
 
+        # Rimuovi eventuali job di riepilogo precedenti
+        current_jobs = context.job_queue.get_jobs_by_name(f"summary_{user_id}")
+        for job in current_jobs:
+            job.schedule_removal()
+
+        # Pianifica il messaggio di riepilogo dopo un breve periodo di inattività
         context.job_queue.run_once(
             check_and_send_summary,
-            7,
+            2,
             context={'chat_id': update.message.chat_id, 'user_data': user_data},
             name=f"summary_{user_id}"
         )
@@ -153,8 +159,7 @@ def check_and_send_summary(context: CallbackContext):
     chat_id = context.job.context['chat_id']
     current_time = time.time()
 
-    # Controlla se photo_batch_start_time è definito e se è trascorso un intervallo di inattività di 5 secondi
-    if user_data['photo_batch_start_time'] and (current_time - user_data['photo_batch_start_time']) >= 5:
+    if user_data['photo_batch_start_time'] and (current_time - user_data['photo_batch_start_time']) >= 2:
         send_summary_message(context)
 
 # Funzione per tradurre il testo in inglese
@@ -173,7 +178,6 @@ def translate_and_synonyms(text, target_language='en'):
         synonyms = {translated_text}
     return list(synonyms)
 
-# Funzione per la ricerca fuzzy
 def fuzzy_search(query, labels, threshold=80):
     matches = process.extract(query, labels, limit=len(labels))
     return [match for match, score in matches if score >= threshold]
