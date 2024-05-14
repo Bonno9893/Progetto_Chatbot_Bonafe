@@ -185,7 +185,7 @@ def search_images(update: Update, context: CallbackContext):
                 break
 
     if not found_any:
-        update.message.reply_text('Nessuna immagine trovata per la tua ricerca.', reply_markup=help_button())
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave!', reply_markup=help_button())
 
 def search_images_with_query(update: Update, context: CallbackContext, query: str, translate: bool) -> bool:
     user_id = update.message.from_user.id
@@ -247,7 +247,7 @@ def delete_all_images(update: Update, context: CallbackContext) -> None:
 
 def download_all_images(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
-    update.message.reply_text("Inizio del download di tutte le immagini... Questo potrebbe richiedere un po' di tempo.")
+    update.message.reply_text("Inizio del download di tutte le immagini... Potrebbe richiedere qualche secondo.")
 
     try:
         blobs = list(bucket.list_blobs(prefix=f'{user_id}/'))
