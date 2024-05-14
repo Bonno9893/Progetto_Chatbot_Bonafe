@@ -197,7 +197,7 @@ def search_images(update: Update, context: CallbackContext):
                 break
 
     if not found_any:
-        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave!', reply_markup=help_button())
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave o prova a cercare con un altra parola!', reply_markup=help_button())
 
 def search_images_with_query(update: Update, context: CallbackContext, query: str, translate: bool) -> bool:
     user_id = update.message.from_user.id
