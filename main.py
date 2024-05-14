@@ -142,7 +142,6 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
         for job in current_jobs:
             job.schedule_removal()
 
-        # Pianifica il messaggio di riepilogo dopo un breve periodo di inattività
         context.job_queue.run_once(
             check_and_send_summary,
             2,
@@ -162,7 +161,6 @@ def check_and_send_summary(context: CallbackContext):
     if user_data['photo_batch_start_time'] and (current_time - user_data['photo_batch_start_time']) >= 2:
         send_summary_message(context)
 
-# Funzione per tradurre il testo in inglese
 def translate_to_english(text):
     result = translate_client.translate(text, source_language='it', target_language='en')
     return result['translatedText']
