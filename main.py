@@ -43,15 +43,6 @@ def start(update: Update, context: CallbackContext) -> None:
     update.message.reply_text(f'Ciao {user_first_name}! Premi il pulsante qui sotto per ottenere aiuto.', reply_markup=reply_markup)
 
 def help_command(update: Update, context: CallbackContext):
-    if update.callback_query:
-        query = update.callback_query
-        query.answer()
-        chat_id = query.message.chat_id
-        method = context.bot.edit_message_text
-    else:
-        chat_id = update.message.chat_id
-        method = context.bot.send_message
-
     help_text = """
 Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immagini inviate dagli utenti e di recuperarle tramite la loro descrizione. Per interagire con me scrivi in chat qui sotto i seguenti comandi:
 
@@ -59,7 +50,7 @@ Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immag
 2. Se invii una sola immagine, puoi scrivere una descrizione personalizzata, composta da una o più parole prima dell'invio. Questa ti aiuterà a trovarla più facilmente!
 3. Per cercare un'immagine corrispondente ad una tua descrizione utilizza il comando "Cerca immagine [parola chiave]" (es. Cerca immagine gatto). Utilizza una sola parola per descrivere l'immagine!
 4. Per cercare tutte le immagini corrispondenti ad una tua descrizione utilizza il comando "Cerca tutte le immagini [parola chiave]" (es. Cerca tutte le immagini gatto). Utilizza una sola parola per descrivere le immagini!
-5. Utilizza "#" prima dellaparola chiave per cercare quella parola senza che essa venga tradotta, nel caso in cui tu abbia, ad esempio, fornito una descrizione personalizzata! ( es. Cerca immagine #Toby)
+5. Utilizza "#" prima della parola chiave per cercare quella parola senza che essa venga tradotta, nel caso in cui tu abbia, ad esempio, fornito una descrizione personalizzata! (es. Cerca immagine #Toby)
 6. Per ottenere tutte le immagini da te caricate fino a questo momento scrivi "Scarica tutte le immagini"
 7. Per eliminare le immagini trovate nell'ultima tua ricerca scrivi "Elimina immagini ultima ricerca"
 8. Per eliminare tutte le immagini da te caricate fino a questo momento scrivi "Elimina tutte le immagini" 
@@ -67,7 +58,20 @@ Ciao, mi presento, sono Photo Chatbot! Il mio compito è di memorizzare le immag
 
 Inviami un'immagine per iniziare!
     """
-    method(chat_id=chat_id, text=help_text, reply_markup=help_button())
+    if update.callback_query:
+        query = update.callback_query
+        query.answer()
+        chat_id = query.message.chat_id
+        message_id = query.message.message_id
+        try:
+            context.bot.edit_message_text(chat_id=chat_id, message_id=message_id, text=help_text, reply_markup=help_button())
+        except Exception as e:
+            logger.error(f"Failed to edit message: {e}")
+            context.bot.send_message(chat_id=chat_id, text=help_text, reply_markup=help_button())
+    else:
+        chat_id = update.message.chat_id
+        context.bot.send_message(chat_id=chat_id, text=help_text, reply_markup=help_button())
+
 
 def send_start_message(update: Update, context: CallbackContext):
     if not context.user_data.get('batch_started'):
@@ -185,7 +189,7 @@ def search_images(update: Update, context: CallbackContext):
                 break
 
     if not found_any:
-        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave!', reply_markup=help_button())
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave, oppure utilizza un altra parola.', reply_markup=help_button())
 
 def search_images_with_query(update: Update, context: CallbackContext, query: str, translate: bool) -> bool:
     user_id = update.message.from_user.id
