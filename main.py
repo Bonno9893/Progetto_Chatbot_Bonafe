@@ -72,11 +72,9 @@ Inviami un'immagine per iniziare!
         chat_id = update.message.chat_id
         context.bot.send_message(chat_id=chat_id, text=help_text, reply_markup=help_button())
 
-
 def send_start_message(update: Update, context: CallbackContext):
     if not context.user_data.get('batch_started'):
-        update.message.reply_text(
-            "Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere Qualche secondo.")
+        update.message.reply_text("Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere qualche secondo.")
         context.user_data['batch_started'] = True
 
 def send_summary_message(context: CallbackContext):
@@ -96,7 +94,7 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     user_data = context.user_data
 
-    if 'photo_batch_start_time' not in user_data:
+    if 'photo_batch_start_time' not in user_data or user_data['photo_batch_start_time'] is None:
         user_data['photo_batch_start_time'] = time.time()
         user_data['uploaded_photos_count'] = 0
         update.message.reply_text("Inizio del caricamento di tutte le immagini... Questo potrebbe richiedere qualche secondo.")
@@ -139,16 +137,27 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
 
         user_data['uploaded_photos_count'] += 1
 
+        context.job_queue.run_once(
+            check_and_send_summary,
+            7,
+            context={'chat_id': update.message.chat_id, 'user_data': user_data},
+            name=f"summary_{user_id}"
+        )
+
     except Exception as e:
         logger.error(f"Error during image upload: {e}")
         update.message.reply_text("Si è verificato un errore durante il caricamento dell'immagine. Riprova.", reply_markup=help_button())
 
-    context.job_queue.run_once(
-        send_summary_message,
-        15,
-        context={'chat_id': update.message.chat_id, 'user_data': user_data}
-    )
+def check_and_send_summary(context: CallbackContext):
+    user_data = context.job.context['user_data']
+    chat_id = context.job.context['chat_id']
+    current_time = time.time()
 
+    # Controlla se photo_batch_start_time è definito e se è trascorso un intervallo di inattività di 5 secondi
+    if user_data['photo_batch_start_time'] and (current_time - user_data['photo_batch_start_time']) >= 5:
+        send_summary_message(context)
+
+# Funzione per tradurre il testo in inglese
 def translate_to_english(text):
     result = translate_client.translate(text, source_language='it', target_language='en')
     return result['translatedText']
@@ -164,6 +173,7 @@ def translate_and_synonyms(text, target_language='en'):
         synonyms = {translated_text}
     return list(synonyms)
 
+# Funzione per la ricerca fuzzy
 def fuzzy_search(query, labels, threshold=80):
     matches = process.extract(query, labels, limit=len(labels))
     return [match for match, score in matches if score >= threshold]
@@ -189,7 +199,7 @@ def search_images(update: Update, context: CallbackContext):
                 break
 
     if not found_any:
-        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave, oppure utilizza un altra parola.', reply_markup=help_button())
+        update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave!', reply_markup=help_button())
 
 def search_images_with_query(update: Update, context: CallbackContext, query: str, translate: bool) -> bool:
     user_id = update.message.from_user.id
@@ -270,10 +280,7 @@ def error(update, context):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
 def handle_commands(update: Update, context: CallbackContext):
-    update.message.reply_text(
-        "Azione completata! Usa il pulsante qui sotto per ulteriori aiuti o informazioni.",
-        reply_markup=help_button()
-    )
+    update.message.reply_text("Azione completata! Usa il pulsante qui sotto per ulteriori aiuti o informazioni.", reply_markup=help_button())
 
 def main() -> None:
     print('Il Bot è partito...')
