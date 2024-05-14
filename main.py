@@ -142,9 +142,10 @@ def handle_photo(update: Update, context: CallbackContext) -> None:
         for job in current_jobs:
             job.schedule_removal()
 
+        # Pianifica il messaggio di riepilogo dopo un breve periodo di inattività
         context.job_queue.run_once(
             check_and_send_summary,
-            2,
+            7,
             context={'chat_id': update.message.chat_id, 'user_data': user_data},
             name=f"summary_{user_id}"
         )
@@ -158,13 +159,16 @@ def check_and_send_summary(context: CallbackContext):
     chat_id = context.job.context['chat_id']
     current_time = time.time()
 
-    if user_data['photo_batch_start_time'] and (current_time - user_data['photo_batch_start_time']) >= 2:
+    # Controlla se photo_batch_start_time è definito e se è trascorso un intervallo di inattività di 7 secondi
+    if user_data['photo_batch_start_time'] and (current_time - user_data['photo_batch_start_time']) >= 7:
         send_summary_message(context)
 
+# Funzione per tradurre il testo in inglese
 def translate_to_english(text):
     result = translate_client.translate(text, source_language='it', target_language='en')
     return result['translatedText']
 
+# Funzione per ottenere sinonimi delle parole tradotte
 def translate_and_synonyms(text, target_language='en'):
     translated_text = translate_to_english(text)
     synonyms = set()
@@ -176,10 +180,12 @@ def translate_and_synonyms(text, target_language='en'):
         synonyms = {translated_text}
     return list(synonyms)
 
-def fuzzy_search(query, labels, threshold=80):
+# Funzione per la ricerca fuzzy
+def fuzzy_search(query, labels, threshold=90):  # Aumenta la soglia di ricerca fuzzy a 90
     matches = process.extract(query, labels, limit=len(labels))
     return [match for match, score in matches if score >= threshold]
 
+# Funzione per cercare le immagini
 def search_images(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     command_text = update.message.text.lower()
@@ -203,6 +209,7 @@ def search_images(update: Update, context: CallbackContext):
     if not found_any:
         update.message.reply_text('Nessuna immagine trovata per la tua ricerca. Riprova utilizzando il simbolo "#" prima della parola chiave!', reply_markup=help_button())
 
+# Funzione di supporto per la ricerca delle immagini
 def search_images_with_query(update: Update, context: CallbackContext, query: str, translate: bool) -> bool:
     user_id = update.message.from_user.id
     single_search = 'cerca immagine' in update.message.text.lower()
@@ -218,17 +225,21 @@ def search_images_with_query(update: Update, context: CallbackContext, query: st
     for blob in blobs:
         blob.reload()
         labels = blob.metadata.get('labels', '').split(',')
-        matches = fuzzy_search(translated_query, labels)
-        if matches:
-            found_any = True
-            context.user_data['last_search'].append(blob.name)
-            image_bytes = blob.download_as_bytes()
-            context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes, reply_markup=help_button())
-            if single_search:
-                break
+
+        # Controlla la presenza della parola chiave originale o della traduzione
+        if translated_query.lower() in labels:
+            matches = fuzzy_search(translated_query, labels)
+            if matches:
+                found_any = True
+                context.user_data['last_search'].append(blob.name)
+                image_bytes = blob.download_as_bytes()
+                context.bot.send_photo(chat_id=update.message.chat_id, photo=image_bytes, reply_markup=help_button())
+                if single_search:
+                    break
 
     return found_any
 
+# Funzione per eliminare le immagini dell'ultima ricerca
 def delete_last_search(update: Update, context: CallbackContext):
     try:
         user_id = update.message.from_user.id
@@ -245,6 +256,7 @@ def delete_last_search(update: Update, context: CallbackContext):
         logger.error(f"Errore durante l'eliminazione delle immagini: {str(e)}")
         update.message.reply_text('Si è verificato un errore durante l\'eliminazione delle immagini.')
 
+# Funzione per eliminare tutte le immagini
 def delete_all_images(update: Update, context: CallbackContext) -> None:
     user_id = update.message.from_user.id
     count = 0
@@ -261,6 +273,7 @@ def delete_all_images(update: Update, context: CallbackContext) -> None:
         logger.error(f"Errore durante l'eliminazione delle immagini: {str(e)}")
         update.message.reply_text("Si è verificato un errore durante l'eliminazione delle tue immagini.")
 
+# Funzione per scaricare tutte le immagini
 def download_all_images(update: Update, context: CallbackContext):
     user_id = update.message.from_user.id
     update.message.reply_text("Inizio del download di tutte le immagini... Potrebbe richiedere qualche secondo.")
@@ -278,12 +291,15 @@ def download_all_images(update: Update, context: CallbackContext):
         logger.error(f"Errore durante il download delle immagini: {str(e)}")
         update.message.reply_text("Si è verificato un errore durante il download delle immagini.", reply_markup=help_button())
 
+# Funzione per loggare gli errori
 def error(update, context):
     logger.warning('Update "%s" caused error "%s"', update, context.error)
 
+# Funzione per gestire i comandi completati
 def handle_commands(update: Update, context: CallbackContext):
     update.message.reply_text("Azione completata! Usa il pulsante qui sotto per ulteriori aiuti o informazioni.", reply_markup=help_button())
 
+# Funzione principale
 def main() -> None:
     print('Il Bot è partito...')
     updater = Updater(bot_token, use_context=True)
